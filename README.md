@@ -10,13 +10,11 @@ Elgato Keylight Controller for linux
 $ keylight-control
 ```
 
-Or with ![keylight-systray](https://github.com/mschneider82/keylight-systray)
+Or with [keylight-systray](https://github.com/mschneider82/keylight-systray)
 
 ## License
 
 MIT
-
-Icon file is copied from elgato github repository.
 
 ## Author
 
