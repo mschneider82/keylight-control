@@ -74,7 +74,10 @@ func main() {
 					lg2, _ := device.FetchLightGroup(context.TODO())
 					device.UpdateLightGroup(context.TODO(), togglePowerState(lg2))
 				})
-				lg, _ := device.FetchLightGroup(context.TODO())
+				lg, err := device.FetchLightGroup(context.TODO())
+				if err != nil {
+					continue
+				}
 				brightness := lg.Lights[0].Brightness
 				brightnessLabel := widget.NewLabel("Brightness: " + strconv.Itoa(brightness) + "%")
 
