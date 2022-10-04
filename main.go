@@ -8,6 +8,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,24 +39,38 @@ func (d *DelayedExec) getVal() (i int) {
 	return d.val.Load().(int)
 }
 
+type AllLights struct {
+	sync.RWMutex
+	all []*keylight.Device
+}
+
 func main() {
 	a := app.New()
 
 	timeout := time.Duration(10 * time.Second)
+	ctx := context.Background()
+	ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	devicesCh, err := discoverLights()
 	if err != nil {
 		panic(err)
 	}
-	var allLights []*keylight.Device
+	var allLights AllLights
 
 	w := a.NewWindow("KeyLight Control")
 	var objects []fyne.CanvasObject
 	converter := newConverter()
 
 	powerAll := widget.NewButton("Toggle Power All", func() {
-		for _, d := range allLights {
-			lg, _ := d.FetchLightGroup(context.TODO())
-			d.UpdateLightGroup(context.TODO(), togglePowerState(lg))
+		allLights.RLock()
+		defer allLights.RUnlock()
+		for _, d := range allLights.all {
+			lg, err := d.FetchLightGroup(ctx)
+			if err != nil {
+				continue
+			}
+			d.UpdateLightGroup(ctx, togglePowerState(lg))
 		}
 	})
 	objects = append(objects, powerAll, widget.NewSeparator())
@@ -67,14 +82,19 @@ func main() {
 				if device == nil {
 					return
 				}
-				allLights = append(allLights, device)
+				allLights.Lock()
+				allLights.all = append(allLights.all, device)
+				allLights.Unlock()
 
 				d := widget.NewLabel(strings.ReplaceAll(device.Name, `\`, ""))
 				powerDev := widget.NewButton("Toggle Power", func() {
-					lg2, _ := device.FetchLightGroup(context.TODO())
-					device.UpdateLightGroup(context.TODO(), togglePowerState(lg2))
+					lg2, err := device.FetchLightGroup(ctx)
+					if err != nil {
+						return
+					}
+					device.UpdateLightGroup(ctx, togglePowerState(lg2))
 				})
-				lg, err := device.FetchLightGroup(context.TODO())
+				lg, err := device.FetchLightGroup(ctx)
 				if err != nil {
 					continue
 				}
@@ -82,18 +102,24 @@ func main() {
 				brightnessLabel := widget.NewLabel("Brightness: " + strconv.Itoa(brightness) + "%")
 
 				brightnessButtonMinus := widget.NewButton("-", func() {
-					lg2, _ := device.FetchLightGroup(context.TODO())
+					lg2, err := device.FetchLightGroup(ctx)
+					if err != nil {
+						return
+					}
 					brightness2 := lg2.Lights[0].Brightness
 					lg2.Lights[0].Brightness = brightness2 - 1
-					device.UpdateLightGroup(context.TODO(), lg2)
+					device.UpdateLightGroup(ctx, lg2)
 					brightnessLabel.SetText("Brightness: " + strconv.Itoa(brightness2-1) + "%")
 				})
 
 				brightnessButtonPlus := widget.NewButton("+", func() {
-					lg2, _ := device.FetchLightGroup(context.TODO())
+					lg2, err := device.FetchLightGroup(ctx)
+					if err != nil {
+						return
+					}
 					brightness2 := lg2.Lights[0].Brightness
 					lg2.Lights[0].Brightness = brightness2 + 1
-					device.UpdateLightGroup(context.TODO(), lg2)
+					device.UpdateLightGroup(ctx, lg2)
 					brightnessLabel.SetText("Brightness: " + strconv.Itoa(brightness2+1) + "%")
 				})
 
@@ -102,9 +128,12 @@ func main() {
 				brightnessSlider.Step = float64(1)
 				brightnessSliderdelayedExec := DelayedExec{}
 				brightnessSlider.OnChanged = func(newval float64) {
-					lg2, _ := device.FetchLightGroup(context.TODO())
+					lg2, err := device.FetchLightGroup(ctx)
+					if err != nil {
+						return
+					}
 					lg2.Lights[0].Brightness = int(newval)
-					go brightnessSliderdelayedExec.UpdateVal(int(newval), func() { device.UpdateLightGroup(context.TODO(), lg2) })
+					go brightnessSliderdelayedExec.UpdateVal(int(newval), func() { device.UpdateLightGroup(ctx, lg2) })
 					brightnessLabel.SetText("Brightness: " + strconv.Itoa(int(newval)) + "%")
 				}
 
@@ -117,9 +146,12 @@ func main() {
 				tempSliderdelayedExec := DelayedExec{}
 				tempSlider.OnChanged = func(newval float64) {
 					device := device
-					lg2, _ := device.FetchLightGroup(context.TODO())
+					lg2, err := device.FetchLightGroup(ctx)
+					if err != nil {
+						return
+					}
 					lg2.Lights[0].Temperature = converter.FromKelvin(int(newval))
-					go tempSliderdelayedExec.UpdateVal(int(newval), func() { device.UpdateLightGroup(context.TODO(), lg2) })
+					go tempSliderdelayedExec.UpdateVal(int(newval), func() { device.UpdateLightGroup(ctx, lg2) })
 					temp := fmt.Sprintf("%d K", int(newval))
 					tempLabel.SetText("Temperature: " + temp)
 				}
@@ -132,7 +164,7 @@ func main() {
 					widget.NewSeparator(),
 				)
 				w.SetContent(container.NewVBox(objects...))
-			case <-time.After(timeout):
+			case <-ctxTimeout.Done():
 				return
 			}
 		}
